@@ -22,22 +22,12 @@ jobs:
             name: linux-arm64
           - target: armv5te-unknown-linux-gnueabi
             name: linux-armv5
-          - target: armv6-unknown-linux-gnueabihf
-            name: linux-armv6
           - target: armv7-unknown-linux-gnueabihf
             name: linux-armv7
           - target: x86_64-unknown-freebsd
             name: freebsd-amd64
           - target: i686-unknown-freebsd
             name: freebsd-386
-          - target: aarch64-unknown-freebsd
-            name: freebsd-arm64
-          - target: armv5te-unknown-freebsd
-            name: freebsd-armv5
-          - target: armv6-unknown-freebsd
-            name: freebsd-armv6
-          - target: armv7-unknown-freebsd
-            name: freebsd-armv7
     steps:
       - uses: actions/checkout@v4
 

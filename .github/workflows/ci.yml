@@ -1,0 +1,60 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            name: linux-amd64
+          - target: i686-unknown-linux-gnu
+            name: linux-386
+          - target: aarch64-unknown-linux-gnu
+            name: linux-arm64
+          - target: armv5te-unknown-linux-gnueabi
+            name: linux-armv5
+          - target: armv6-unknown-linux-gnueabihf
+            name: linux-armv6
+          - target: armv7-unknown-linux-gnueabihf
+            name: linux-armv7
+          - target: x86_64-unknown-freebsd
+            name: freebsd-amd64
+          - target: i686-unknown-freebsd
+            name: freebsd-386
+          - target: aarch64-unknown-freebsd
+            name: freebsd-arm64
+          - target: armv5te-unknown-freebsd
+            name: freebsd-armv5
+          - target: armv6-unknown-freebsd
+            name: freebsd-armv6
+          - target: armv7-unknown-freebsd
+            name: freebsd-armv7
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+          override: true
+
+      - name: Add target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Install cross
+        run: cargo install cross --locked
+
+      - name: Build
+        run: cross build --target ${{ matrix.target }}
+        env:
+          CROSS_TARGET: ${{ matrix.target }}

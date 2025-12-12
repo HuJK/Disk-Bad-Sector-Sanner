@@ -1,0 +1,14 @@
+[package]
+name = "disk_scan"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4.5", features = ["derive"] }
+crossbeam-channel = "0.5"
+crossterm = "0.27"
+libc = "0.2"
+rand = "0.8"
+rand_xoshiro = "0.6"
+signal-hook = "0.3"

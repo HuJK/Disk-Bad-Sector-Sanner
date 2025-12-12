@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: write
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -45,6 +48,18 @@ jobs:
         run: cargo install cross --locked
 
       - name: Build
-        run: cross build --target ${{ matrix.target }}
+        run: cross build --target ${{ matrix.target }} --release
         env:
           CROSS_TARGET: ${{ matrix.target }}
+
+      - name: Prepare release binary
+        if: startsWith(github.ref, 'refs/tags/')
+        run: cp target/${{ matrix.target }}/release/disk_scan disk_scan_${{ matrix.name }}
+
+      - name: Upload release asset
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: disk_scan_${{ matrix.name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

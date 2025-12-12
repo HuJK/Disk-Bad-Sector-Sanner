@@ -23,6 +23,15 @@ const BLKGETSIZE64: libc::c_ulong = 0x8008_1272; // fallback value if libc missi
 const DIOCGMEDIASIZE: libc::c_ulong = libc::DIOCGMEDIASIZE;
 const ERROR_MARKS_LIMIT: usize = 1024;
 const DESTRUCTIVE_WARNING: &str = "WARNING: This operation overwrites data on the specified block devices. All data will be destroyed.";
+const MAX_SCAN_BYTES: usize = 1024 * 1024; // 1 MiB
+const MIN_GPT_SIZE: u64 = 1024;
+const MIN_MBR_SIZE: u64 = 512;
+const MIN_NTFS_SIZE: u64 = 1024 * 1024;
+const MIN_EXFAT_SIZE: u64 = 1024 * 1024;
+const MIN_FAT32_SIZE: u64 = 32 * 1024 * 1024;
+const MIN_EXT_SIZE: u64 = 2048;
+const MIN_APFS_SIZE: u64 = 1024 * 1024;
+const MIN_ZFS_SIZE: u64 = 64 * 1024 * 1024;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Disk bad sector checker (destructive)")]
@@ -46,6 +55,10 @@ struct Args {
     /// Skip the destructive warning prompt
     #[arg(long)]
     skip_warning: bool,
+
+    /// Skip filesystem/partition table detection before destructive scan
+    #[arg(long)]
+    skip_fs_check: bool,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
@@ -131,6 +144,10 @@ fn main() -> Result<()> {
 
     if args.devices.is_empty() {
         return Err(anyhow!("At least one -d/--device must be provided"));
+    }
+
+    if !args.skip_fs_check {
+        enforce_fs_checks(&args.devices)?;
     }
 
     if !args.skip_warning {
@@ -371,6 +388,145 @@ fn detect_device_size(path: &Path) -> Result<u64> {
             path.display()
         ))
     }
+}
+
+fn enforce_fs_checks(devices: &[PathBuf]) -> Result<()> {
+    let mut found = Vec::new();
+    for path in devices {
+        if let Some(kind) = detect_existing_fs(path)? {
+            found.push((path.display().to_string(), kind));
+        }
+    }
+
+    if found.is_empty() {
+        return Ok(());
+    }
+
+    let mut message = String::from("Existing partition table or filesystem detected:\n");
+    for (device, kind) in &found {
+        message.push_str(&format!("- {}: {}\n", device, kind));
+    }
+    message.push_str(
+        "Refusing to continue to protect data. Back up important data, then wipe the partition table/filesystem (e.g. `wipefs -a <device>` or `dd if=/dev/zero of=<device> bs=1M count=10`), or rerun with --skip_fs_check to force continue.",
+    );
+
+    Err(anyhow!(message))
+}
+
+fn detect_existing_fs(path: &Path) -> Result<Option<String>> {
+    let size = detect_device_size(path)?;
+    if size == 0 {
+        return Ok(None);
+    }
+
+    let mut file = File::open(path)
+        .with_context(|| format!("failed to open {} for filesystem check", path.display()))?;
+    let mut buf = vec![0u8; std::cmp::min(size as usize, MAX_SCAN_BYTES)];
+    let mut read = 0;
+    while read < buf.len() {
+        let n = file.read(&mut buf[read..])?;
+        if n == 0 {
+            break;
+        }
+        read += n;
+    }
+    buf.truncate(read);
+
+    Ok(detect_signature(&buf, size))
+}
+
+fn detect_signature(buf: &[u8], size: u64) -> Option<String> {
+    if size >= MIN_GPT_SIZE && has_gpt_with_partitions(buf) {
+        return Some("GPT partition table".to_string());
+    }
+    if size >= MIN_MBR_SIZE && has_mbr_with_partitions(buf) {
+        return Some("MBR partition table".to_string());
+    }
+    if size >= MIN_NTFS_SIZE && has_ntfs(buf) {
+        return Some("NTFS filesystem".to_string());
+    }
+    if size >= MIN_EXFAT_SIZE && has_exfat(buf) {
+        return Some("exFAT filesystem".to_string());
+    }
+    if size >= MIN_FAT32_SIZE && has_fat32(buf) {
+        return Some("FAT32 filesystem".to_string());
+    }
+    if size >= MIN_EXT_SIZE && has_ext(buf) {
+        return Some("ext2/3/4 filesystem".to_string());
+    }
+    if size >= MIN_APFS_SIZE && has_apfs(buf) {
+        return Some("APFS filesystem".to_string());
+    }
+    if size >= MIN_ZFS_SIZE && has_zfs(buf) {
+        return Some("ZFS pool".to_string());
+    }
+    None
+}
+
+fn has_gpt_with_partitions(buf: &[u8]) -> bool {
+    if buf.len() < 520 || &buf[512..520] != b"EFI PART" {
+        return false;
+    }
+
+    // GPT header fields (little endian)
+    if buf.len() < 92 {
+        return true; // conservative: header present but truncated
+    }
+    let entries_lba = u64::from_le_bytes(buf[72..80].try_into().unwrap());
+    let entries_count = u32::from_le_bytes(buf[80..84].try_into().unwrap());
+    let entry_size = u32::from_le_bytes(buf[84..88].try_into().unwrap()).max(1);
+
+    if entries_count == 0 {
+        return false;
+    }
+
+    let sector_size = 512u64;
+    let entries_offset = entries_lba.saturating_mul(sector_size) as usize;
+    let bytes_needed = entries_count.saturating_mul(entry_size) as usize;
+
+    if entries_offset >= buf.len() {
+        return true; // conservative: header exists, entries outside scanned window
+    }
+
+    let available = buf.len().saturating_sub(entries_offset);
+    let slice_len = bytes_needed.min(available).min(4 * entry_size as usize); // sample a few entries
+    let entries_slice = &buf[entries_offset..entries_offset + slice_len];
+    entries_slice.iter().any(|b| *b != 0)
+}
+
+fn has_mbr_with_partitions(buf: &[u8]) -> bool {
+    if buf.len() < 512 {
+        return false;
+    }
+    if buf[510] != 0x55 || buf[511] != 0xAA {
+        return false;
+    }
+    let entries = &buf[446..510];
+    entries.chunks(16).any(|entry| entry.iter().any(|b| *b != 0))
+}
+
+fn has_ntfs(buf: &[u8]) -> bool {
+    buf.len() >= 11 && &buf[3..11] == b"NTFS    "
+}
+
+fn has_exfat(buf: &[u8]) -> bool {
+    buf.len() >= 11 && &buf[3..11] == b"EXFAT   "
+}
+
+fn has_fat32(buf: &[u8]) -> bool {
+    buf.len() >= 90 && &buf[82..90] == b"FAT32   "
+}
+
+fn has_ext(buf: &[u8]) -> bool {
+    buf.len() >= 1082 && buf[1080] == 0x53 && buf[1081] == 0xEF
+}
+
+fn has_apfs(buf: &[u8]) -> bool {
+    buf.windows(4).any(|w| w == b"NXSB")
+}
+
+fn has_zfs(buf: &[u8]) -> bool {
+    buf.windows(9).any(|w| w == b"ZFS LABEL")
 }
 
 fn fill_buffer(rng: &mut Xoroshiro128PlusPlus, buf: &mut [u8]) {

@@ -22,6 +22,7 @@ Flags:
 - `--chunk-size <bytes>`: chunk size for IO (default 1 MiB)
 - `--mode [rich|basic]`: Unicode or ASCII progress bars
 - `--skip-warning`: skip the destructive confirmation prompt
+- `--skip-fs-check`: skip pre-flight detection of partition tables/filesystems (dangerous)
 
 The UI auto-sizes to the terminal width. Write progress uses solid blocks (`█`/`#`), read uses shaded blocks (`░`/`=`). Errors render as `X` (write), `E` (read), and `V` (value mismatch). ETA is per-stage (write then read).
 
